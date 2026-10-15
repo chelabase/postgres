@@ -1,0 +1,15 @@
+\set ECHO none
+created
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"k_big","op":"i","k":[["9007199254740993"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"k_num","op":"i","k":[["1.50"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"k_txt","op":"i","k":[["q\"uo\\te é"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"k_uuid","op":"i","k":[["a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"k_ts","op":"i","k":[["2026-01-02 03:04:05+00"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"k_iv","op":"i","k":[["P1DT2H"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"k_fl","op":"i","k":[["0.1"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"k_by","op":"i","k":[["\\x0102"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"k_en","op":"i","k":[["happy"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"k_mo","op":"i","k":[["$12.34"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"k_rc","op":"i","k":[["public.target"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"k_comp","op":"i","k":[["1","x"]]}]}
+dropped

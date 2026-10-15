@@ -1,0 +1,16 @@
+\set ECHO none
+created
+ERROR:  chelabase_keys: unknown option "nope"
+ERROR:  chelabase_keys: option "max_tables" must be an integer between 1 and 1000
+ERROR:  chelabase_keys: option "max_tables" must be an integer between 1 and 1000
+ERROR:  chelabase_keys: option "max_tables" must be an integer between 1 and 1000
+ERROR:  chelabase_keys: option "max_keys_per_table" must be an integer between 1 and 10000
+ERROR:  chelabase_keys: option "max_keys_per_table" must be an integer between 1 and 10000
+ERROR:  chelabase_keys: option "max_message_bytes" must be an integer between 65536 and 16777216
+ERROR:  chelabase_keys: option "max_message_bytes" must be an integer between 65536 and 16777216
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"lk","op":"i","k":[["1"],["2"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"lk","op":"c"}]}
+{"v":1,"lsn":"L","xid":X,"all":true}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"la","op":"i","k":[["2"]]},{"rel":R,"s":"public","t":"lb","op":"i","k":[["2"]]}]}
+{"v":1,"lsn":"L","xid":X,"all":true}
+dropped
