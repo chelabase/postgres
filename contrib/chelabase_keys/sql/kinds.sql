@@ -3,7 +3,7 @@
 \pset tuples_only on
 \pset format unaligned
 SET client_min_messages = warning;
-CREATE FUNCTION keys(slot text, VARIADIC opts text[] DEFAULT '{}') RETURNS SETOF text LANGUAGE sql AS $$
+CREATE OR REPLACE FUNCTION keys(slot text, VARIADIC opts text[] DEFAULT '{}') RETURNS SETOF text LANGUAGE sql AS $$
   SELECT regexp_replace(regexp_replace(data,
            '"lsn":"[0-9A-F]+/[0-9A-F]+","xid":[0-9]+', '"lsn":"L","xid":X'),
          '"rel":[0-9]+', '"rel":R', 'g')
