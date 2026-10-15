@@ -25,9 +25,13 @@ tests += {
       'keys',
       'kinds',
       'limits',
+      'edges',
+      'encoding',
     ],
     'regress_args': [
       '--temp-config', files('logical.conf'),
+      # the plugin refuses SQL_ASCII databases (a C-locale cluster's default)
+      '--encoding=UTF8',
     ],
     # These tests need "wal_level = logical".
     'runningcheck': false,

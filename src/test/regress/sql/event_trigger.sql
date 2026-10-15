@@ -670,3 +670,24 @@ DROP FUNCTION reassign_report(), reassign_refuse();
 DROP TABLE reassign_t;
 DROP ROLE regress_reassign_a, regress_reassign_b;
 SET event_triggers = 'off';
+-- REASSIGN OWNED collects no commands for pg_event_trigger_ddl_commands()
+-- (Chelabase's DDL guard relies on it)
+SET event_triggers = 'on';
+CREATE ROLE regress_reassign_c;
+CREATE ROLE regress_reassign_d;
+CREATE TABLE reassign_u (id int);
+ALTER TABLE reassign_u OWNER TO regress_reassign_c;
+CREATE FUNCTION reassign_commands() RETURNS event_trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE NOTICE '% %: % commands', tg_event, tg_tag,
+    (SELECT count(*) FROM pg_event_trigger_ddl_commands());
+END $$;
+CREATE EVENT TRIGGER reassign_commands ON ddl_command_end
+  WHEN TAG IN ('REASSIGN OWNED') EXECUTE FUNCTION reassign_commands();
+REASSIGN OWNED BY regress_reassign_c TO regress_reassign_d;
+SELECT pg_get_userbyid(relowner) AS owner FROM pg_class WHERE relname = 'reassign_u';
+DROP EVENT TRIGGER reassign_commands;
+DROP FUNCTION reassign_commands();
+DROP TABLE reassign_u;
+DROP ROLE regress_reassign_c, regress_reassign_d;
+SET event_triggers = 'off';

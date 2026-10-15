@@ -1,0 +1,26 @@
+\set ECHO none
+created
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"tc","op":"i","k":[["x*2500","1"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"tc","op":"i","k":[["x*2500","2"]]},{"rel":R,"s":"public","t":"tc","op":"d","k":[["x*2500","1"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"tc","op":"u","k":[["x*2500","2"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"tc","op":"u","k":[["x*2500","2"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"tc","op":"i","k":[["z*2500","2"]]},{"rel":R,"s":"public","t":"tc","op":"d","k":[["x*2500","2"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"tc","op":"i","k":[["x*2500","7"],["x*2500","17"]]},{"rel":R,"s":"public","t":"tc","op":"d","k":[["x*2500","7"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"tn","op":"i","k":[["1"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"tn","op":"u","k":[["1"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"tn","op":"i","k":[["2"]]},{"rel":R,"s":"public","t":"tn","op":"d","k":[["1"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"kn","op":"i","k":[["1.0"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"kn","op":"i","k":[["1.00"]]},{"rel":R,"s":"public","t":"kn","op":"d","k":[["1.0"]]}]}
+t
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"kc","op":"i","k":[["a\u0001b\nc\td\u001f\"\\e"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"ka","op":"i","k":[["{1,2}"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"kr","op":"i","k":[["(1,\"a b\")"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"kb","op":"i","k":[["3","\\x00ff"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"we.ird\"s","t":"t.a\"b","op":"i","k":[["1"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabc","op":"i","k":[["1"]]}]}
+drained
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"tx1","op":"c"},{"rel":R,"s":"public","t":"tx2","op":"c"}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"ta","op":"c"},{"rel":R,"s":"public","t":"tf","op":"c"}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"tx1","op":"c"},{"rel":R,"s":"public","t":"tx2","op":"i","k":[["5"]]},{"rel":R,"s":"public","t":"tx2","op":"d","k":[["5"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"kd","op":"c"}]}
+dropped

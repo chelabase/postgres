@@ -1,0 +1,16 @@
+\set ECHO none
+created
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"sch\303\251","t":"t\303\242b","op":"i","k":[["caf\303\251"]]}]}
+dropped
+created
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"sch\303\251","t":"t\303\242b","op":"i","k":[["caf\303\251"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"sch\303\251","t":"t\303\242b","op":"u","k":[["caf\303\251"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"sch\303\251","t":"t\303\242b","op":"i","k":[["caff\303\250"]]},{"rel":R,"s":"sch\303\251","t":"t\303\242b","op":"d","k":[["caf\303\251"]]}]}
+dropped
+created
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"\343\202\271\343\202\255","t":"\350\241\250","op":"i","k":[["\346\227\245\346\234\254","x"]]}]}
+dropped
+ERROR:  chelabase_keys: database encoding "SQL_ASCII" can't be converted to UTF-8
+ERROR:  chelabase_keys: database encoding "SQL_ASCII" can't be converted to UTF-8
+0
+0
