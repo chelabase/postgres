@@ -27,4 +27,13 @@
  */
 extern PGDLLIMPORT bool am_chelabase_realtime;
 
+/*
+ * True when the neon walproposer runs in this server: set by the neon
+ * extension in the postmaster (shared_preload_libraries) where it registers
+ * the walproposer background worker, so every child inherits it.  Default
+ * false, no GUC.  While it is set, only the walproposer can be a
+ * synchronous standby (syncrep.c, U7b).
+ */
+extern PGDLLIMPORT bool chelabase_walproposer_active;
+
 #endif							/* CHELABASE_H */

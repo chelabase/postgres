@@ -78,6 +78,7 @@
 #include "common/int.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "replication/chelabase.h"
 #include "replication/syncrep.h"
 #include "replication/walsender.h"
 #include "replication/walsender_private.h"
@@ -93,6 +94,9 @@ char	   *SyncRepStandbyNames;
 	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')
 
 static bool announce_next_takeover = true;
+
+/* Set by the neon extension when the walproposer runs here (chelabase.h). */
+bool		chelabase_walproposer_active = false;
 
 SyncRepConfigData *SyncRepConfig = NULL;
 static int	SyncRepWaitMode = SYNC_REP_NO_WAIT;
@@ -871,13 +875,15 @@ SyncRepGetStandbyPriority(void)
 		return 0;
 
 	/*
-	 * U7: only the in-process walproposer (a background worker that takes a
-	 * walsender slot) can be a synchronous standby.  A client walsender
-	 * (B_WAL_SENDER) is never one, whatever application_name it sends: it
-	 * could otherwise name itself in synchronous_standby_names (or match
-	 * "*") and acknowledge WAL the safekeepers haven't stored.
+	 * U7/U7b: where the neon walproposer runs (chelabase_walproposer_active),
+	 * only it (a background worker that takes a walsender slot) can be a
+	 * synchronous standby.  A client walsender (B_WAL_SENDER) there is never
+	 * one, whatever application_name it sends: it could otherwise name
+	 * itself in synchronous_standby_names (or match "*") and acknowledge WAL
+	 * the safekeepers haven't stored.  Without the walproposer, synchronous
+	 * replication works as in stock Postgres.
 	 */
-	if (MyBackendType != B_BG_WORKER)
+	if (chelabase_walproposer_active && MyBackendType != B_BG_WORKER)
 		return 0;
 
 	if (!SyncStandbysDefined() || SyncRepConfig == NULL)
