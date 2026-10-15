@@ -4817,7 +4817,7 @@ struct config_string ConfigureNamesString[] =
 			GUC_LIST_INPUT | GUC_LIST_QUOTE | GUC_SUPERUSER_ONLY
 		},
 		&output_plugin_libraries_string,
-		"pgoutput, test_decoding",
+		"pgoutput, test_decoding, chelabase_keys",
 		NULL, NULL, NULL
 	},
 

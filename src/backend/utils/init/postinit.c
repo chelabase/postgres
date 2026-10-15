@@ -40,6 +40,7 @@
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
 #include "postmaster/postmaster.h"
+#include "replication/chelabase.h"
 #include "replication/slot.h"
 #include "replication/slotsync.h"
 #include "replication/walsender.h"
@@ -347,9 +348,13 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 		/*
 		 * Check that the database is currently allowing connections.
 		 * (Background processes can override this test and the next one by
-		 * setting override_allow_connections.)
+		 * setting override_allow_connections.)  A superuser may connect to a
+		 * closed database unless it is a template (template0 stays closed to
+		 * everyone): Chelabase's reconcile guards databases that are born
+		 * closed before opening them.
 		 */
-		if (!dbform->datallowconn && !override_allow_connections)
+		if (!dbform->datallowconn && !override_allow_connections &&
+			!(am_superuser && !dbform->datistemplate))
 			ereport(FATAL,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 					 errmsg("database \"%s\" is not currently accepting connections",
@@ -980,6 +985,26 @@ InitPostgres(const char *in_dbname, Oid dboid,
 					 errmsg("permission denied to start WAL sender"),
 					 errdetail("Only roles with the %s attribute may start a WAL sender process.",
 							   "REPLICATION")));
+	}
+
+	/*
+	 * chelabase_realtime may only open logical replication connections:
+	 * no normal backend, physical walsender or background worker ever runs
+	 * as it, so no SQL (slot functions included) runs as it.  The identity
+	 * is the authenticated user, decided here once for the whole session.
+	 * (Bootstrap and standalone backends run as the bootstrap superuser.)
+	 */
+	if (!bootstrap && IsUnderPostmaster)
+	{
+		char	   *authname = GetUserNameFromId(GetAuthenticatedUserId(), true);
+
+		am_chelabase_realtime = authname != NULL &&
+			strcmp(authname, CHELABASE_REALTIME_ROLE) == 0;
+		if (am_chelabase_realtime && !am_db_walsender)
+			ereport(FATAL,
+					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+					 errmsg("role \"%s\" may only open logical replication connections",
+							CHELABASE_REALTIME_ROLE)));
 	}
 
 	/*

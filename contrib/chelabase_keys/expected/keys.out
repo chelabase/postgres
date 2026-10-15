@@ -1,0 +1,22 @@
+\set ECHO none
+created
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"orders","op":"i","k":[["1"],["2"]]},{"rel":R,"s":"public","t":"orders","op":"u","k":[["1"]]},{"rel":R,"s":"public","t":"orders","op":"d","k":[["2"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"orders","op":"i","k":[["3"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"pku","op":"i","k":[["1"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"pku","op":"i","k":[["2"]]},{"rel":R,"s":"public","t":"pku","op":"d","k":[["1"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"pku","op":"u","k":[["2"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"tk","op":"i","k":[["x*2500"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"tk","op":"u","k":[["x*2500"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"tr","op":"i","k":[["1"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"tr","op":"c"}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"nopk","op":"c"}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"rfull","op":"c"}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"rnothing","op":"c"}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"ridx","op":"i","k":[["1"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"ridx2","op":"c"}]}
+t|pt1
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"e1","op":"i","k":[["2"]]}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"e1","op":"i","k":[["3"]]}]}
+drained
+t|t
+dropped

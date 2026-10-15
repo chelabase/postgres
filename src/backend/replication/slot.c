@@ -47,6 +47,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/interrupt.h"
+#include "replication/chelabase.h"
 #include "replication/slotsync.h"
 #include "replication/slot.h"
 #include "replication/walsender_private.h"
@@ -346,6 +347,20 @@ ReplicationSlotCreate(const char *name, bool db_specific,
 	Assert(MyReplicationSlot == NULL);
 
 	ReplicationSlotValidateName(name, ERROR);
+
+	/*
+	 * Slot names starting with "rt_" belong to chelabase_realtime alone, so
+	 * no one (superusers included) can take its names or fill its per-compute
+	 * slot count with look-alikes.  Slot synchronisation on a standby copies
+	 * the primary's names and is exempt.
+	 */
+	if (strncmp(name, CHELABASE_REALTIME_SLOT_PREFIX,
+				strlen(CHELABASE_REALTIME_SLOT_PREFIX)) == 0 &&
+		!am_chelabase_realtime && !IsSyncingReplicationSlots())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("replication slot names starting with \"%s\" are reserved for %s",
+						CHELABASE_REALTIME_SLOT_PREFIX, CHELABASE_REALTIME_ROLE)));
 
 	if (failover)
 	{

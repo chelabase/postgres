@@ -70,6 +70,7 @@
 #include "nodes/replnodes.h"
 #include "pgstat.h"
 #include "postmaster/interrupt.h"
+#include "replication/chelabase.h"
 #include "replication/decode.h"
 #include "replication/logical.h"
 #include "replication/slotsync.h"
@@ -121,6 +122,15 @@ bool		am_walsender = false;	/* Am I a walsender process? */
 bool		am_cascading_walsender = false; /* Am I cascading WAL to another
 											 * standby? */
 bool		am_db_walsender = false;	/* Connected to a database? */
+bool		am_chelabase_realtime = false;	/* Authenticated as
+												 * chelabase_realtime? */
+
+/*
+ * The one slot this chelabase_realtime session created (empty until then).
+ * START_REPLICATION is allowed on this slot only.
+ */
+static NameData chelabase_realtime_slot;
+static bool chelabase_realtime_slot_created = false;
 
 /* GUC variables */
 int			max_wal_senders = 10;	/* the maximum number of concurrent
@@ -274,6 +284,8 @@ static void CreateReplicationSlot(CreateReplicationSlotCmd *cmd);
 static void DropReplicationSlot(DropReplicationSlotCmd *cmd);
 static void StartReplication(StartReplicationCmd *cmd);
 static void StartLogicalReplication(StartReplicationCmd *cmd);
+static void ChelabaseRealtimeRefuse(const char *cmdtag, const char *detail) pg_attribute_noreturn();
+static void ChelabaseRealtimeCheckCommand(Node *cmd_node);
 static void ProcessStandbyMessage(void);
 static void ProcessStandbyReplyMessage(void);
 static void ProcessStandbyHSFeedbackMessage(void);
@@ -2031,6 +2043,174 @@ WalSndWaitForWal(XLogRecPtr loc)
 }
 
 /*
+ * The command tag of a replication command, as exec_replication_command
+ * names it.
+ */
+static const char *
+ReplicationCommandTag(Node *cmd_node)
+{
+	switch (cmd_node->type)
+	{
+		case T_IdentifySystemCmd:
+			return "IDENTIFY_SYSTEM";
+		case T_ReadReplicationSlotCmd:
+			return "READ_REPLICATION_SLOT";
+		case T_BaseBackupCmd:
+			return "BASE_BACKUP";
+		case T_CreateReplicationSlotCmd:
+			return "CREATE_REPLICATION_SLOT";
+		case T_DropReplicationSlotCmd:
+			return "DROP_REPLICATION_SLOT";
+		case T_AlterReplicationSlotCmd:
+			return "ALTER_REPLICATION_SLOT";
+		case T_StartReplicationCmd:
+			return "START_REPLICATION";
+		case T_TimeLineHistoryCmd:
+			return "TIMELINE_HISTORY";
+		case T_VariableShowStmt:
+			return "SHOW";
+		case T_UploadManifestCmd:
+			return "UPLOAD_MANIFEST";
+		default:
+			return "UNKNOWN";
+	}
+}
+
+/*
+ * Refuse a replication command to chelabase_realtime.
+ */
+static void
+ChelabaseRealtimeRefuse(const char *cmdtag, const char *detail)
+{
+	ereport(ERROR,
+			(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+			 errmsg("permission denied for replication command \"%s\"",
+					cmdtag),
+			 detail ? errdetail_internal("%s", detail) : 0));
+}
+
+/*
+ * CREATE_REPLICATION_SLOT for chelabase_realtime: one temporary logical
+ * chelabase_keys slot per session, named rt_..., without two-phase decoding
+ * or failover, and with SNAPSHOT 'nothing' or 'export' ('use' needs a
+ * transaction block, which the role can't open).
+ */
+static void
+ChelabaseRealtimeCheckCreate(CreateReplicationSlotCmd *cmd)
+{
+	const char *cmdtag = "CREATE_REPLICATION_SLOT";
+	ListCell   *lc;
+
+	if (chelabase_realtime_slot_created)
+		ChelabaseRealtimeRefuse(cmdtag,
+								"A chelabase_realtime session may create one replication slot.");
+	if (cmd->kind != REPLICATION_KIND_LOGICAL)
+		ChelabaseRealtimeRefuse(cmdtag,
+								"chelabase_realtime may only create logical replication slots.");
+	if (!cmd->temporary)
+		ChelabaseRealtimeRefuse(cmdtag,
+								"chelabase_realtime may only create temporary replication slots.");
+	if (cmd->plugin == NULL || strcmp(cmd->plugin, CHELABASE_KEYS_PLUGIN) != 0)
+		ChelabaseRealtimeRefuse(cmdtag,
+								"chelabase_realtime may only use the " CHELABASE_KEYS_PLUGIN " output plugin.");
+	if (cmd->slotname == NULL ||
+		strncmp(cmd->slotname, CHELABASE_REALTIME_SLOT_PREFIX,
+				strlen(CHELABASE_REALTIME_SLOT_PREFIX)) != 0)
+		ChelabaseRealtimeRefuse(cmdtag,
+								"chelabase_realtime's slot names must start with \"" CHELABASE_REALTIME_SLOT_PREFIX "\".");
+
+	foreach(lc, cmd->options)
+	{
+		DefElem    *defel = (DefElem *) lfirst(lc);
+
+		if (strcmp(defel->defname, "snapshot") == 0)
+		{
+			char	   *action = defGetString(defel);
+
+			if (strcmp(action, "nothing") != 0 && strcmp(action, "export") != 0)
+				ChelabaseRealtimeRefuse(cmdtag,
+										"chelabase_realtime may only use SNAPSHOT 'nothing' or 'export'.");
+		}
+		else if (strcmp(defel->defname, "two_phase") == 0)
+		{
+			if (defGetBoolean(defel))
+				ChelabaseRealtimeRefuse(cmdtag,
+										"chelabase_realtime may not use TWO_PHASE.");
+		}
+		else if (strcmp(defel->defname, "failover") == 0)
+		{
+			if (defGetBoolean(defel))
+				ChelabaseRealtimeRefuse(cmdtag,
+										"chelabase_realtime may not use FAILOVER.");
+		}
+		else
+			ChelabaseRealtimeRefuse(cmdtag,
+									"chelabase_realtime may only use the SNAPSHOT, TWO_PHASE and FAILOVER options.");
+	}
+}
+
+/*
+ * START_REPLICATION for chelabase_realtime: logical, on the slot this
+ * session created, which must still be a temporary chelabase_keys slot held
+ * by this process.  Persistent slots (a customer's pgoutput slot carries row
+ * values) and other sessions' slots are never acquired.
+ */
+static void
+ChelabaseRealtimeCheckStart(StartReplicationCmd *cmd)
+{
+	const char *cmdtag = "START_REPLICATION";
+	ReplicationSlot *s;
+	bool		ok = false;
+
+	if (cmd->kind != REPLICATION_KIND_LOGICAL)
+		ChelabaseRealtimeRefuse(cmdtag,
+								"chelabase_realtime may only start logical replication.");
+	if (!chelabase_realtime_slot_created || cmd->slotname == NULL ||
+		strcmp(cmd->slotname, NameStr(chelabase_realtime_slot)) != 0)
+		ChelabaseRealtimeRefuse(cmdtag,
+								"chelabase_realtime may only stream from the slot its session created.");
+
+	LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+	s = SearchNamedReplicationSlot(cmd->slotname, false);
+	if (s != NULL && s->in_use && SlotIsLogical(s) &&
+		strcmp(NameStr(s->data.plugin), CHELABASE_KEYS_PLUGIN) == 0)
+	{
+		SpinLockAcquire(&s->mutex);
+		ok = s->data.persistency == RS_TEMPORARY &&
+			s->active_pid == MyProcPid;
+		SpinLockRelease(&s->mutex);
+	}
+	LWLockRelease(ReplicationSlotControlLock);
+
+	if (!ok)
+		ChelabaseRealtimeRefuse(cmdtag,
+								"chelabase_realtime may only stream from the slot its session created.");
+}
+
+/*
+ * The replication commands chelabase_realtime may run: IDENTIFY_SYSTEM,
+ * CREATE_REPLICATION_SLOT and START_REPLICATION, each as checked above.
+ * Everything else is refused.
+ */
+static void
+ChelabaseRealtimeCheckCommand(Node *cmd_node)
+{
+	switch (cmd_node->type)
+	{
+		case T_IdentifySystemCmd:
+			return;
+		case T_CreateReplicationSlotCmd:
+			ChelabaseRealtimeCheckCreate((CreateReplicationSlotCmd *) cmd_node);
+			return;
+		case T_StartReplicationCmd:
+			ChelabaseRealtimeCheckStart((StartReplicationCmd *) cmd_node);
+			return;
+		default:
+			ChelabaseRealtimeRefuse(ReplicationCommandTag(cmd_node), NULL);
+	}
+}
+
+/*
  * Execute an incoming replication command.
  *
  * Returns true if the cmd_string was recognized as WalSender command, false
@@ -2091,6 +2271,13 @@ exec_replication_command(const char *cmd_string)
 		MemoryContextSwitchTo(old_context);
 		MemoryContextDelete(cmd_context);
 
+		/* chelabase_realtime runs no SQL at all, only the commands below */
+		if (am_chelabase_realtime)
+			ereport(ERROR,
+					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+					 errmsg("role \"%s\" can't run SQL in a replication connection",
+							CHELABASE_REALTIME_ROLE)));
+
 		/* XXX this is a pretty random place to make this check */
 		if (MyDatabaseId == InvalidOid)
 			ereport(ERROR,
@@ -2129,6 +2316,13 @@ exec_replication_command(const char *cmd_string)
 	 */
 	ereport(log_replication_commands ? LOG : DEBUG1,
 			(errmsg("received replication command: %s", cmd_string)));
+
+	/*
+	 * chelabase_realtime may run only the commands it needs, checked before
+	 * the command looks up or touches any slot.
+	 */
+	if (am_chelabase_realtime)
+		ChelabaseRealtimeCheckCommand(cmd_node);
 
 	/*
 	 * Disallow replication commands in aborted transaction blocks.
@@ -2177,6 +2371,12 @@ exec_replication_command(const char *cmd_string)
 			cmdtag = "CREATE_REPLICATION_SLOT";
 			set_ps_display(cmdtag);
 			CreateReplicationSlot((CreateReplicationSlotCmd *) cmd_node);
+			if (am_chelabase_realtime)
+			{
+				namestrcpy(&chelabase_realtime_slot,
+						   ((CreateReplicationSlotCmd *) cmd_node)->slotname);
+				chelabase_realtime_slot_created = true;
+			}
 			EndReplicationCommand(cmdtag);
 			break;
 
