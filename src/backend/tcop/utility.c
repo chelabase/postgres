@@ -924,11 +924,6 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 			DropRole((DropRoleStmt *) parsetree);
 			break;
 
-		case T_ReassignOwnedStmt:
-			/* no event triggers for global objects */
-			ReassignOwnedObjects((ReassignOwnedStmt *) parsetree);
-			break;
-
 		case T_LockStmt:
 
 			/*
@@ -1827,6 +1822,17 @@ ProcessUtilitySlow(ParseState *pstate,
 			case T_DropOwnedStmt:
 				DropOwnedObjects((DropOwnedStmt *) parsetree);
 				/* no commands stashed for DROP */
+				commandCollected = true;
+				break;
+
+			case T_ReassignOwnedStmt:
+
+				/*
+				 * Fires ddl_command_start and ddl_command_end like DROP
+				 * OWNED, so a guard sees ownership moves; the owner changes
+				 * themselves aren't collected.
+				 */
+				ReassignOwnedObjects((ReassignOwnedStmt *) parsetree);
 				commandCollected = true;
 				break;
 
