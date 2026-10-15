@@ -12,7 +12,10 @@
  *	   {"rel":<oid>,"s":"<schema>","t":"<table>","op":"c"}]}
  *
  * or {"v":1,"lsn":"X/Y","xid":<full xid>,"all":true} once the transaction
- * goes past one of the bounds (max_tables, max_message_bytes).
+ * goes past one of the bounds (max_tables, max_message_bytes).  The
+ * max_message_bytes budget counts each listed key's memory overhead
+ * (KEY_MEMORY_OVERHEAD) besides the message text, so it also bounds the
+ * memory a transaction's keys take.
  *
  * Relations appear in the order of their first change; within a relation
  * the ops come in the order i, u, d (or a single c); keys come in the order

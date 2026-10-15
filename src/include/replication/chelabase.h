@@ -1,14 +1,16 @@
 /*-------------------------------------------------------------------------
  *
  * chelabase.h
- *	  Names Chelabase's realtime path relies on, and the session's
- *	  chelabase_realtime flag.
+ *	  Names Chelabase's realtime path relies on, the session's
+ *	  chelabase_realtime flag, and the server's walproposer flag.
  *
  * The role named CHELABASE_REALTIME_ROLE may only open logical replication
- * connections, run IDENTIFY_SYSTEM, create one temporary chelabase_keys slot
- * whose name starts with CHELABASE_REALTIME_SLOT_PREFIX, and stream from that
- * slot (walsender.c, postinit.c).  Slot names with that prefix are reserved
- * for the role (slot.c).
+ * connections, set no parameter in its startup packet but client_encoding
+ * and application_name (postinit.c), run IDENTIFY_SYSTEM, create one
+ * temporary chelabase_keys slot whose name starts with
+ * CHELABASE_REALTIME_SLOT_PREFIX, and stream from that slot (walsender.c).
+ * Slot names with that prefix are reserved for the role (slot.c).
+ * Hot-standby feedback is ignored on every logical slot (walsender.c).
  *
  * src/include/replication/chelabase.h
  *
