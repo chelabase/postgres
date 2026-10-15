@@ -13,6 +13,7 @@ SUBDIRS = \
 		bloom		\
 		btree_gin	\
 		btree_gist	\
+		chelabase_keys	\
 		citext		\
 		cube		\
 		dblink		\
