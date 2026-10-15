@@ -26,6 +26,10 @@
  * begin_cb and restored in commit_cb, so the session, database and role
  * settings never change the form of a key.
  *
+ * Every string in a message (keys, schema and table names) is UTF-8,
+ * converted from the database encoding; a SQL_ASCII database has no
+ * encoding to convert from and is refused when the plugin starts.
+ *
  * There are no stream callbacks (a transaction is decoded at its commit;
  * large ones spill to disk) and no prepare callbacks (a prepared
  * transaction is decoded at COMMIT PREPARED).
@@ -47,6 +51,7 @@
 #include "common/hashfn.h"
 #include "fmgr.h"
 #include "lib/stringinfo.h"
+#include "mb/pg_wchar.h"
 #include "replication/logical.h"
 #include "replication/output_plugin.h"
 #include "replication/reorderbuffer.h"
@@ -100,6 +105,18 @@ typedef struct KeyEntry
 	uint8		ops;			/* bit per op the key was seen under */
 } KeyEntry;
 
+/*
+ * T2 m2: the memory a key costs besides its text, counted in the budget for
+ * each op it is listed under, so that max_message_bytes bounds the memory a
+ * transaction's keys take and not only the message's text: its hash entry
+ * (dynahash's element header and the KeyEntry), its list cell and the chunk
+ * header of its text's allocation.  (The text itself is counted once per op;
+ * its allocation can round it up to twice that.)
+ */
+#define KEY_MEMORY_OVERHEAD \
+	(MAXALIGN(sizeof(HASHELEMENT)) + MAXALIGN(sizeof(KeyEntry)) + \
+	 sizeof(ListCell) + sizeof(uint64))
+
 /* One relation touched by the current transaction. */
 typedef struct RelEntry
 {
@@ -111,7 +128,7 @@ typedef struct RelEntry
 	HTAB	   *keyhash;		/* distinct keys, all ops together */
 	List	   *keys[NUM_KEY_OPS];	/* char * key texts, first-seen order */
 	int64		key_bytes[NUM_KEY_OPS]; /* sum of the key texts' lengths */
-	int64		size;			/* this relation's part of the message */
+	int64		size;			/* this relation's part of the budget */
 } RelEntry;
 
 typedef struct ChelabaseKeysData
@@ -130,7 +147,8 @@ typedef struct ChelabaseKeysData
 	HTAB	   *rels;			/* Oid -> RelEntry */
 	List	   *rel_order;		/* RelEntry *, first-change order */
 	int			nrels;
-	int64		size;			/* upper bound of the message length */
+	int64		size;			/* the budget: an upper bound of the message
+								 * length and of the keys' memory */
 } ChelabaseKeysData;
 
 /* Result of reading a key from a tuple. */
@@ -140,6 +158,11 @@ typedef enum KeyResult
 	KEY_TOAST,					/* a key column is an unchanged TOAST pointer */
 	KEY_MISSING,				/* no tuple, or a key column is NULL */
 } KeyResult;
+
+/* Options, for the "given more than once" check. */
+#define OPT_MAX_KEYS_PER_TABLE	0x01
+#define OPT_MAX_TABLES			0x02
+#define OPT_MAX_MESSAGE_BYTES	0x04
 
 static void ck_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 					   bool is_init);
@@ -166,6 +189,8 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 
 /*
  * Parse an integer option value in [lo, hi], or raise the option's error.
+ * T2 m1: the value is decimal digits only: no sign, no leading or trailing
+ * space.
  */
 static int
 parse_int_option(DefElem *elem, int lo, int hi)
@@ -179,6 +204,9 @@ parse_int_option(DefElem *elem, int lo, int hi)
 	raw = strVal(elem->arg);
 	if (*raw == '\0')
 		goto bad;
+	for (const char *p = raw; *p != '\0'; p++)
+		if (*p < '0' || *p > '9')
+			goto bad;
 	errno = 0;
 	val = strtol(raw, &end, 10);
 	if (errno != 0 || *end != '\0' || val < lo || val > hi)
@@ -193,11 +221,37 @@ bad:
 	pg_unreachable();
 }
 
+/*
+ * T2 m1: each option is given at most once.
+ */
+static void
+check_once(DefElem *elem, int *seen, int bit)
+{
+	if (*seen & bit)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("chelabase_keys: option \"%s\" is given more than once",
+						elem->defname)));
+	*seen |= bit;
+}
+
 static void
 ck_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt, bool is_init)
 {
 	ChelabaseKeysData *data;
 	ListCell   *option;
+	int			seen = 0;
+
+	/*
+	 * U4: messages are UTF-8.  A SQL_ASCII database's text has no known
+	 * encoding, so it can't be converted: refuse it here, at slot creation
+	 * (is_init) as at every start.
+	 */
+	if (GetDatabaseEncoding() == PG_SQL_ASCII)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("chelabase_keys: database encoding \"%s\" can't be converted to UTF-8",
+						GetDatabaseEncodingName())));
 
 	data = palloc0(sizeof(ChelabaseKeysData));
 	data->max_keys_per_table = MAX_KEYS_PER_TABLE_DEFAULT;
@@ -215,14 +269,23 @@ ck_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt, bool is_init)
 		Assert(elem->arg == NULL || IsA(elem->arg, String));
 
 		if (strcmp(elem->defname, "max_keys_per_table") == 0)
+		{
+			check_once(elem, &seen, OPT_MAX_KEYS_PER_TABLE);
 			data->max_keys_per_table =
 				parse_int_option(elem, MAX_KEYS_PER_TABLE_MIN, MAX_KEYS_PER_TABLE_MAX);
+		}
 		else if (strcmp(elem->defname, "max_tables") == 0)
+		{
+			check_once(elem, &seen, OPT_MAX_TABLES);
 			data->max_tables =
 				parse_int_option(elem, MAX_TABLES_MIN, MAX_TABLES_MAX);
+		}
 		else if (strcmp(elem->defname, "max_message_bytes") == 0)
+		{
+			check_once(elem, &seen, OPT_MAX_MESSAGE_BYTES);
 			data->max_message_bytes =
 				parse_int_option(elem, MAX_MESSAGE_BYTES_MIN, MAX_MESSAGE_BYTES_MAX);
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -331,7 +394,7 @@ key_match(const void *key1, const void *key2, Size keysize)
 
 /*
  * Bytes this relation adds to the message's "changes" array, separators
- * between its own groups included.
+ * between its own groups included, plus each listed key's memory overhead.
  */
 static int64
 rel_size(RelEntry *re)
@@ -349,7 +412,8 @@ rel_size(RelEntry *re)
 		if (n == 0)
 			continue;
 		size += re->prefix_len + OP_PIECE_LEN + KEYS_OPEN_LEN +
-			re->key_bytes[op] + (n - 1) + KEYS_CLOSE_LEN;
+			re->key_bytes[op] + (n - 1) + KEYS_CLOSE_LEN +
+			(int64) n * KEY_MEMORY_OVERHEAD;
 		groups++;
 	}
 	if (groups > 1)
@@ -396,6 +460,20 @@ mark_c(ChelabaseKeysData *data, RelEntry *re)
 		re->key_bytes[op] = 0;
 	}
 	return update_size(data, re);
+}
+
+/*
+ * Append a string of the database encoding as a JSON string in UTF-8 (U4).
+ * Converted before escaping, so escape_json sees only UTF-8.
+ */
+static void
+append_json_utf8(StringInfo out, const char *s)
+{
+	char	   *u = pg_server_to_any(s, strlen(s), PG_UTF8);
+
+	escape_json(out, u);
+	if (u != s)
+		pfree(u);
 }
 
 /*
@@ -453,9 +531,9 @@ get_rel(ChelabaseKeysData *data, Relation relation)
 	nspname = get_namespace_name(RelationGetNamespace(relation));
 	initStringInfo(&buf);
 	appendStringInfo(&buf, "{\"rel\":%u,\"s\":", relid);
-	escape_json(&buf, nspname ? nspname : "");
+	append_json_utf8(&buf, nspname ? nspname : "");
 	appendStringInfoString(&buf, ",\"t\":");
-	escape_json(&buf, RelationGetRelationName(relation));
+	append_json_utf8(&buf, RelationGetRelationName(relation));
 	re->prefix = buf.data;
 	re->prefix_len = buf.len;
 
@@ -567,20 +645,20 @@ pk_attnums(Relation relation, AttrNumber **attnums)
 }
 
 /*
- * The key of a tuple as a JSON array of the key columns' text output,
- * e.g. ["1","x"].
+ * The key columns of a tuple: cols[i] is the i-th key column's text output
+ * as a JSON string (UTF-8), or NULL when the column is an unchanged TOAST
+ * pointer (its value isn't in the record; KEY_TOAST).
  */
 static KeyResult
-tuple_key(Relation relation, HeapTuple tuple, AttrNumber *attnums, int nkeys,
-		  StringInfo out)
+tuple_key_cols(Relation relation, HeapTuple tuple, AttrNumber *attnums,
+			   int nkeys, char **cols)
 {
 	TupleDesc	tupdesc = RelationGetDescr(relation);
+	KeyResult	res = KEY_OK;
 
 	if (tuple == NULL)
 		return KEY_MISSING;
 
-	resetStringInfo(out);
-	appendStringInfoChar(out, '[');
 	for (int i = 0; i < nkeys; i++)
 	{
 		AttrNumber	attnum = attnums[i];
@@ -589,6 +667,7 @@ tuple_key(Relation relation, HeapTuple tuple, AttrNumber *attnums, int nkeys,
 		bool		isnull;
 		Oid			typoutput;
 		bool		typisvarlena;
+		StringInfoData col;
 
 		if (attnum > tupdesc->natts)
 			return KEY_MISSING;
@@ -602,14 +681,36 @@ tuple_key(Relation relation, HeapTuple tuple, AttrNumber *attnums, int nkeys,
 
 		getTypeOutputInfo(attr->atttypid, &typoutput, &typisvarlena);
 		if (typisvarlena && VARATT_IS_EXTERNAL_ONDISK(DatumGetPointer(value)))
-			return KEY_TOAST;	/* unchanged TOASTed value: not in the record */
+		{
+			/* unchanged TOASTed value: not in the record */
+			cols[i] = NULL;
+			res = KEY_TOAST;
+			continue;
+		}
 
+		initStringInfo(&col);
+		append_json_utf8(&col, OidOutputFunctionCall(typoutput, value));
+		cols[i] = col.data;
+	}
+	return res;
+}
+
+/*
+ * A key as a JSON array of its columns, e.g. ["1","x"].
+ */
+static void
+join_key(char **cols, int nkeys, StringInfo out)
+{
+	resetStringInfo(out);
+	appendStringInfoChar(out, '[');
+	for (int i = 0; i < nkeys; i++)
+	{
+		Assert(cols[i] != NULL);
 		if (i > 0)
 			appendStringInfoChar(out, ',');
-		escape_json(out, OidOutputFunctionCall(typoutput, value));
+		appendStringInfoString(out, cols[i]);
 	}
 	appendStringInfoChar(out, ']');
-	return KEY_OK;
 }
 
 static void
@@ -623,6 +724,8 @@ ck_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	int			nkeys;
 	StringInfoData newkey;
 	StringInfoData oldkey;
+	char	  **newcols;
+	char	  **oldcols;
 	KeyResult	nres;
 	KeyResult	ores;
 
@@ -644,52 +747,67 @@ ck_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 	initStringInfo(&newkey);
 	initStringInfo(&oldkey);
+	newcols = palloc0(sizeof(char *) * nkeys);
+	oldcols = palloc0(sizeof(char *) * nkeys);
 
 	switch (change->action)
 	{
 		case REORDER_BUFFER_CHANGE_INSERT:
-			nres = tuple_key(relation, change->data.tp.newtuple, attnums, nkeys, &newkey);
+			nres = tuple_key_cols(relation, change->data.tp.newtuple, attnums, nkeys, newcols);
 			if (nres == KEY_OK)
+			{
+				join_key(newcols, nkeys, &newkey);
 				add_key(data, re, OP_I, newkey.data);
+			}
 			else
 				mark_c(data, re);
 			break;
 
 		case REORDER_BUFFER_CHANGE_UPDATE:
-			nres = tuple_key(relation, change->data.tp.newtuple, attnums, nkeys, &newkey);
+			nres = tuple_key_cols(relation, change->data.tp.newtuple, attnums, nkeys, newcols);
 			if (change->data.tp.oldtuple != NULL)
 			{
 				/*
 				 * Postgres logs the old key when a key column changed or is
-				 * stored externally (flattened, for the latter).  Equal key
-				 * texts, or an unchanged TOASTed new value, are an update of
-				 * that key; different ones are a delete and an insert
+				 * stored externally (flattened, for the latter).  A key
+				 * column that is an unchanged TOAST pointer in the new tuple
+				 * has the old key's value (T2 I1), so the new key is built
+				 * column by column from both.  Equal key texts are an update
+				 * of that key; different ones are a delete and an insert
 				 * (RT3-9).
 				 */
-				ores = tuple_key(relation, change->data.tp.oldtuple, attnums, nkeys, &oldkey);
-				if (ores != KEY_OK)
-					mark_c(data, re);
-				else if (nres == KEY_TOAST ||
-						 (nres == KEY_OK && strcmp(oldkey.data, newkey.data) == 0))
-					add_key(data, re, OP_U, oldkey.data);
-				else if (nres == KEY_OK)
+				ores = tuple_key_cols(relation, change->data.tp.oldtuple, attnums, nkeys, oldcols);
+				if (ores != KEY_OK || nres == KEY_MISSING)
 				{
-					if (add_key(data, re, OP_D, oldkey.data))
-						add_key(data, re, OP_I, newkey.data);
-				}
-				else
 					mark_c(data, re);
+					break;
+				}
+				for (int i = 0; i < nkeys; i++)
+					if (newcols[i] == NULL)
+						newcols[i] = oldcols[i];
+				join_key(oldcols, nkeys, &oldkey);
+				join_key(newcols, nkeys, &newkey);
+				if (strcmp(oldkey.data, newkey.data) == 0)
+					add_key(data, re, OP_U, oldkey.data);
+				else if (add_key(data, re, OP_D, oldkey.data))
+					add_key(data, re, OP_I, newkey.data);
 			}
 			else if (nres == KEY_OK)
+			{
+				join_key(newcols, nkeys, &newkey);
 				add_key(data, re, OP_U, newkey.data);
+			}
 			else
 				mark_c(data, re);
 			break;
 
 		case REORDER_BUFFER_CHANGE_DELETE:
-			ores = tuple_key(relation, change->data.tp.oldtuple, attnums, nkeys, &oldkey);
+			ores = tuple_key_cols(relation, change->data.tp.oldtuple, attnums, nkeys, oldcols);
 			if (ores == KEY_OK)
+			{
+				join_key(oldcols, nkeys, &oldkey);
 				add_key(data, re, OP_D, oldkey.data);
+			}
 			else
 				mark_c(data, re);
 			break;

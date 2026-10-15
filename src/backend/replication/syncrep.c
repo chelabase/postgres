@@ -870,6 +870,16 @@ SyncRepGetStandbyPriority(void)
 	if (am_cascading_walsender)
 		return 0;
 
+	/*
+	 * U7: only the in-process walproposer (a background worker that takes a
+	 * walsender slot) can be a synchronous standby.  A client walsender
+	 * (B_WAL_SENDER) is never one, whatever application_name it sends: it
+	 * could otherwise name itself in synchronous_standby_names (or match
+	 * "*") and acknowledge WAL the safekeepers haven't stored.
+	 */
+	if (MyBackendType != B_BG_WORKER)
+		return 0;
+
 	if (!SyncStandbysDefined() || SyncRepConfig == NULL)
 		return 0;
 

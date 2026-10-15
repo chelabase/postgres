@@ -81,6 +81,8 @@ static void IdleStatsUpdateTimeoutHandler(void);
 static void ClientCheckTimeoutHandler(void);
 static bool ThereIsAtLeastOneRole(void);
 static void process_startup_options(Port *port, bool am_superuser);
+static void check_chelabase_realtime_startup(Port *port);
+static void refuse_chelabase_realtime_parameter(const char *name) pg_attribute_noreturn();
 static void process_settings(Oid databaseid, Oid roleid);
 
 
@@ -1005,6 +1007,8 @@ InitPostgres(const char *in_dbname, Oid dboid,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("role \"%s\" may only open logical replication connections",
 							CHELABASE_REALTIME_ROLE)));
+		if (am_chelabase_realtime)
+			check_chelabase_realtime_startup(MyProcPort);
 	}
 
 	/*
@@ -1277,6 +1281,77 @@ InitPostgres(const char *in_dbname, Oid dboid,
 	/* close the transaction we started above */
 	if (!bootstrap)
 		CommitTransactionCommand();
+}
+
+static void
+refuse_chelabase_realtime_parameter(const char *name)
+{
+	ereport(FATAL,
+			(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+			 errmsg("role \"%s\" may not set parameter \"%s\"",
+					CHELABASE_REALTIME_ROLE, name)));
+}
+
+/*
+ * T3 m1: chelabase_realtime's startup packet may set client_encoding and
+ * application_name, nothing else (user, database and replication aren't
+ * settings).  Any other setting, as a startup key or through "options",
+ * is refused before it is applied: the role can't change its walsender's
+ * limits (wal_sender_timeout, logical_decoding_work_mem, ...).  "options"
+ * may carry nothing at all; the error names the first setting it carries
+ * (or the switch, for a switch that isn't -c or --name=value).
+ */
+static void
+check_chelabase_realtime_startup(Port *port)
+{
+	ListCell   *gucopts;
+
+	if (port == NULL)
+		return;
+
+	if (port->cmdline_options != NULL)
+	{
+		char	  **av;
+		int			maxac;
+		int			ac = 0;
+
+		maxac = 2 + (strlen(port->cmdline_options) + 1) / 2;
+		av = (char **) palloc0(maxac * sizeof(char *));
+		av[ac++] = "postgres";
+		pg_split_opts(av, &ac, port->cmdline_options);
+		av[ac] = NULL;
+
+		if (ac > 1)
+		{
+			const char *arg = av[1];
+			const char *setting = NULL;
+			char	   *name;
+			char	   *value;
+
+			if (strncmp(arg, "--", 2) == 0)
+				setting = arg + 2;
+			else if (strncmp(arg, "-c", 2) == 0)
+				setting = arg[2] != '\0' ? arg + 2 : av[2];
+
+			if (setting == NULL || *setting == '\0')
+				refuse_chelabase_realtime_parameter(arg);
+			ParseLongOption(setting, &name, &value);
+			refuse_chelabase_realtime_parameter(name);
+		}
+	}
+
+	gucopts = list_head(port->guc_options);
+	while (gucopts)
+	{
+		char	   *name = lfirst(gucopts);
+
+		gucopts = lnext(port->guc_options, gucopts);	/* the value */
+		gucopts = lnext(port->guc_options, gucopts);
+
+		if (pg_strcasecmp(name, "client_encoding") != 0 &&
+			pg_strcasecmp(name, "application_name") != 0)
+			refuse_chelabase_realtime_parameter(name);
+	}
 }
 
 /*

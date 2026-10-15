@@ -2870,6 +2870,19 @@ ProcessStandbyHSFeedbackMessage(void)
 	feedbackEpoch = pq_getmsgint(&reply_message, 4);
 	feedbackCatalogXmin = pq_getmsgint(&reply_message, 4);
 	feedbackCatalogEpoch = pq_getmsgint(&reply_message, 4);
+
+	/*
+	 * U6: hot-standby feedback is ignored on a logical slot, whoever sends
+	 * it.  A logical client has no standby queries to protect; honouring it
+	 * would let the client set the slot's xmin (holding back vacuum of every
+	 * table) or clear its catalog_xmin (letting vacuum remove catalog rows
+	 * decoding still needs).  A logical slot's catalog_xmin moves only with
+	 * the client's confirmed position.  (The walproposer reports feedback
+	 * for its own physical slot through ProcessStandbyHSFeedback.)
+	 */
+	if (MyReplicationSlot != NULL && SlotIsLogical(MyReplicationSlot))
+		return;
+
 	ProcessStandbyHSFeedback(replyTime, feedbackXmin, feedbackEpoch, feedbackCatalogXmin, feedbackCatalogEpoch);
 }
 
