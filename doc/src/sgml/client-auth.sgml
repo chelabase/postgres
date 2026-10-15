@@ -677,6 +677,13 @@ include_dir         <replaceable>directory</replaceable>
        method (see <xref linkend="auth-cert"/>) but enables pairing
        the verification of client certificates with any authentication
        method that supports <literal>hostssl</literal> entries.
+       A record with <literal>clientcert=verify-full</literal> also accepts
+       the <literal>map</literal> option, whatever its authentication method
+       and in any order with <literal>clientcert</literal>; for methods that
+       don't otherwise use a map (<literal>scram-sha-256</literal>, for
+       example), the map governs only this certificate check, so one
+       certificate can log in as every user name the map allows (see
+       <xref linkend="auth-username-maps"/>).
       </para>
       <para>
        On any record using client certificate authentication (i.e. one

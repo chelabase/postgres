@@ -68,6 +68,10 @@
      <literal>ddl_command_start</literal> also occurs just before the execution of a
      <literal>SELECT INTO</literal> command, since this is equivalent to
      <literal>CREATE TABLE AS</literal>.
+     It also occurs for <literal>DROP OWNED</literal> and
+     <literal>REASSIGN OWNED</literal>, although they name roles; the
+     ownership changes <literal>REASSIGN OWNED</literal> makes are not
+     reported by <function>pg_event_trigger_ddl_commands</function>.
    </para>
 
    <para>
@@ -1023,6 +1027,14 @@
        </row>
        <row>
         <entry align="left"><literal>IMPORT FOREIGN SCHEMA</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
+        <entry align="center"><literal>-</literal></entry>
+        <entry align="center"><literal>-</literal></entry>
+        <entry align="left"></entry>
+       </row>
+       <row>
+        <entry align="left"><literal>REASSIGN OWNED</literal></entry>
         <entry align="center"><literal>X</literal></entry>
         <entry align="center"><literal>X</literal></entry>
         <entry align="center"><literal>-</literal></entry>

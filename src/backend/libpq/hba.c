@@ -2035,6 +2035,36 @@ parse_hba_line(TokenizedAuthLine *tok_line, int elevel)
 		parsedline->clientcert = clientCertFull;
 	}
 
+	/*
+	 * A user name map is used by the methods that map an external identity
+	 * (ident, peer, gssapi, sspi, cert), and, on any line with
+	 * clientcert=verify-full, by the client certificate's name check (so one
+	 * certificate can log in as every role the map allows).  Checked here,
+	 * once all options are parsed, so the order of map and clientcert on the
+	 * line doesn't matter.
+	 */
+	if (parsedline->usermap &&
+		parsedline->auth_method != uaIdent &&
+		parsedline->auth_method != uaPeer &&
+		parsedline->auth_method != uaGSS &&
+		parsedline->auth_method != uaSSPI &&
+		parsedline->auth_method != uaCert &&
+		parsedline->clientcert != clientCertFull)
+	{
+		ereport(elevel,
+				(errcode(ERRCODE_CONFIG_FILE_ERROR),
+		/* translator: the second %s is a list of auth methods */
+				 errmsg("authentication option \"%s\" is only valid for authentication methods %s",
+						"map",
+						_("ident, peer, gssapi, sspi, and cert, or with clientcert=verify-full")),
+				 errcontext("line %d of configuration file \"%s\"",
+							line_num, file_name)));
+		*err_msg = psprintf("authentication option \"%s\" is only valid for authentication methods %s",
+							"map",
+							"ident, peer, gssapi, sspi, and cert, or with clientcert=verify-full");
+		return NULL;
+	}
+
 	return parsedline;
 }
 
@@ -2058,12 +2088,11 @@ parse_hba_auth_opt(char *name, char *val, HbaLine *hbaline,
 
 	if (strcmp(name, "map") == 0)
 	{
-		if (hbaline->auth_method != uaIdent &&
-			hbaline->auth_method != uaPeer &&
-			hbaline->auth_method != uaGSS &&
-			hbaline->auth_method != uaSSPI &&
-			hbaline->auth_method != uaCert)
-			INVALID_AUTH_OPTION("map", gettext_noop("ident, peer, gssapi, sspi, and cert"));
+		/*
+		 * Which lines may carry a map depends on clientcert too, which may
+		 * come later on the line: parse_hba_line checks it once every option
+		 * is parsed.
+		 */
 		hbaline->usermap = pstrdup(val);
 	}
 	else if (strcmp(name, "clientcert") == 0)

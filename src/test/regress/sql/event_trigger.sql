@@ -638,3 +638,35 @@ DROP POLICY pguc ON event_trigger_test;
 CREATE POLICY pguc ON event_trigger_test USING (FALSE);
 SET event_triggers = 'off';
 DROP POLICY pguc ON event_trigger_test;
+
+-- REASSIGN OWNED fires the DDL event triggers (Chelabase)
+SET event_triggers = 'on';
+CREATE ROLE regress_reassign_a;
+CREATE ROLE regress_reassign_b;
+CREATE TABLE reassign_t (id int);
+ALTER TABLE reassign_t OWNER TO regress_reassign_a;
+CREATE FUNCTION reassign_report() RETURNS event_trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE NOTICE '% %', tg_event, tg_tag;
+END $$;
+CREATE EVENT TRIGGER reassign_start ON ddl_command_start
+  WHEN TAG IN ('REASSIGN OWNED') EXECUTE FUNCTION reassign_report();
+CREATE EVENT TRIGGER reassign_end ON ddl_command_end
+  WHEN TAG IN ('REASSIGN OWNED') EXECUTE FUNCTION reassign_report();
+REASSIGN OWNED BY regress_reassign_a TO regress_reassign_b;
+SELECT pg_get_userbyid(relowner) = 'regress_reassign_b' AS moved FROM pg_class WHERE relname = 'reassign_t';
+CREATE FUNCTION reassign_refuse() RETURNS event_trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'refused %', tg_tag;
+END $$;
+CREATE EVENT TRIGGER reassign_refuse ON ddl_command_end
+  WHEN TAG IN ('REASSIGN OWNED') EXECUTE FUNCTION reassign_refuse();
+REASSIGN OWNED BY regress_reassign_b TO regress_reassign_a;
+SELECT pg_get_userbyid(relowner) = 'regress_reassign_b' AS kept FROM pg_class WHERE relname = 'reassign_t';
+DROP EVENT TRIGGER reassign_refuse;
+DROP EVENT TRIGGER reassign_start;
+DROP EVENT TRIGGER reassign_end;
+DROP FUNCTION reassign_report(), reassign_refuse();
+DROP TABLE reassign_t;
+DROP ROLE regress_reassign_a, regress_reassign_b;
+SET event_triggers = 'off';
