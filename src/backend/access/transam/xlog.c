@@ -6264,8 +6264,9 @@ StartupXLOG(void)
 	XLogReportParameters();
 
 	/*
-	 * NEON specific: remove the pageserver's stale copies of the temporary
-	 * slots StartupReplicationSlots deleted, before backends can write WAL.
+	 * NEON specific: remove the pageserver's stale copies of the
+	 * non-persistent logical slots StartupReplicationSlots deleted, before
+	 * backends can write WAL.
 	 */
 	LogDiscardedSlotFiles();
 

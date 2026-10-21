@@ -2032,7 +2032,8 @@ StartupReplicationSlots(void)
  * slot StartupReplicationSlots deleted, one empty `neon-file:` message per
  * slot, then flush.  Called by the startup process at the end of recovery,
  * once local WAL inserts are allowed.  Idempotent: if the compute stops
- * before the flush, the next start finds the same copies and removes them.
+ * before the messages reach the safekeepers, the next start finds the same
+ * copies and removes them.
  */
 void
 LogDiscardedSlotFiles(void)
