@@ -1,0 +1,19 @@
+\set ECHO none
+created
+drained
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"st_b","op":"c"},{"rel":R,"s":"public","t":"st_a","op":"c"}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"st_a","op":"c"}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"st_c","op":"c"}]}
+0
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"st_a","op":"c"},{"rel":R,"s":"public","t":"st_b","op":"c"}]}|t|t|t
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"st_b","op":"c"}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"st_a","op":"c"},{"rel":R,"s":"public","t":"st_c","op":"c"}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"st_a","op":"c"},{"rel":R,"s":"public","t":"st_b","op":"c"}]}
+{"v":1,"lsn":"L","xid":X,"all":true}
+drained
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"st_d","op":"c"},{"rel":R,"s":"public","t":"st_a","op":"c"}]}
+drained
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"st_t","op":"c"}]}
+t|t
+t
+dropped

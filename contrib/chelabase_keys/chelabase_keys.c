@@ -33,9 +33,22 @@
  * converted from the database encoding; a SQL_ASCII database has no
  * encoding to convert from and is refused when the plugin starts.
  *
- * There are no stream callbacks (a transaction is decoded at its commit;
- * large ones spill to disk) and no prepare callbacks (a prepared
- * transaction is decoded at COMMIT PREPARED).
+ * W9: a transaction that goes past logical_decoding_work_mem is streamed
+ * (S3: always; there is no option).  A streamed transaction keeps no keys
+ * (S4): the stream callbacks record only the relations it touched, per
+ * top-level xid, in first-change order, and its one message, written at
+ * stream_commit in the same form and place as a commit, reports each of
+ * them as "c" (or "all" past max_tables or max_message_bytes).  A top-level
+ * abort, the implicit abort of a transaction cut by a crash and ROLLBACK
+ * PREPARED write nothing; a subtransaction abort keeps the relations.  Each
+ * streamed transaction's state lives in its own memory context under the
+ * decoding context, deleted at every end (RT4-13).  The non-streamed path
+ * (begin, change, commit) is unchanged; Postgres never streams while it
+ * replays a commit, so the two never mix.
+ *
+ * There are no message callbacks (logical messages are skipped) and no
+ * prepare callbacks (no two-phase decoding: a prepared transaction is
+ * decoded, or its stream committed, at COMMIT PREPARED).
  *
  * Copyright (c) 2026, Chelabase
  *
@@ -134,6 +147,28 @@ typedef struct RelEntry
 	int64		size;			/* this relation's part of the budget */
 } RelEntry;
 
+/* One relation touched by a streamed transaction (W9): always "c". */
+typedef struct StreamRel
+{
+	Oid			relid;			/* hash key */
+	char	   *prefix;			/* {"rel":<oid>,"s":"<s>","t":"<t>" */
+} StreamRel;
+
+/*
+ * A streamed top-level transaction's state, from its first streamed change
+ * to its end (stream_commit or a top-level stream_abort).
+ */
+typedef struct StreamTxn
+{
+	TransactionId xid;			/* hash key: the top-level xid */
+	bool		all;			/* past max_tables or max_message_bytes */
+	MemoryContext cxt;			/* holds rels, rel_order and the prefixes */
+	HTAB	   *rels;			/* Oid -> StreamRel */
+	List	   *rel_order;		/* StreamRel *, first-change order */
+	int			nrels;
+	int64		size;			/* upper bound of the message's length */
+} StreamTxn;
+
 typedef struct ChelabaseKeysData
 {
 	/* options */
@@ -143,6 +178,10 @@ typedef struct ChelabaseKeysData
 
 	MemoryContext change_cxt;	/* per change scratch, reset after each */
 	MemoryContext txn_cxt;		/* per transaction, reset at commit */
+
+	/* W9: streamed transactions in progress, by top-level xid */
+	MemoryContext stream_cxt;	/* holds streams and each entry's context */
+	HTAB	   *streams;		/* TransactionId -> StreamTxn */
 
 	/* the transaction being decoded */
 	int			guc_nestlevel;	/* 0 when the output settings aren't set */
@@ -178,6 +217,21 @@ static void ck_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 static void ck_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 						int nrelations, Relation relations[],
 						ReorderBufferChange *change);
+static void ck_stream_start(LogicalDecodingContext *ctx,
+							ReorderBufferTXN *txn);
+static void ck_stream_stop(LogicalDecodingContext *ctx,
+						   ReorderBufferTXN *txn);
+static void ck_stream_abort(LogicalDecodingContext *ctx,
+							ReorderBufferTXN *txn, XLogRecPtr abort_lsn);
+static void ck_stream_commit(LogicalDecodingContext *ctx,
+							 ReorderBufferTXN *txn, XLogRecPtr commit_lsn);
+static void ck_stream_change(LogicalDecodingContext *ctx,
+							 ReorderBufferTXN *txn, Relation relation,
+							 ReorderBufferChange *change);
+static void ck_stream_truncate(LogicalDecodingContext *ctx,
+							   ReorderBufferTXN *txn, int nrelations,
+							   Relation relations[],
+							   ReorderBufferChange *change);
 
 void
 _PG_output_plugin_init(OutputPluginCallbacks *cb)
@@ -188,6 +242,18 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->truncate_cb = ck_truncate;
 	cb->commit_cb = ck_commit_txn;
 	cb->shutdown_cb = ck_shutdown;
+
+	/*
+	 * W9: streaming.  No stream_message_cb (logical messages stay skipped)
+	 * and no stream_prepare_cb or other prepare callback, so ctx->twophase
+	 * stays false.
+	 */
+	cb->stream_start_cb = ck_stream_start;
+	cb->stream_stop_cb = ck_stream_stop;
+	cb->stream_abort_cb = ck_stream_abort;
+	cb->stream_commit_cb = ck_stream_commit;
+	cb->stream_change_cb = ck_stream_change;
+	cb->stream_truncate_cb = ck_stream_truncate;
 }
 
 /*
@@ -302,6 +368,19 @@ ck_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt, bool is_init)
 	data->txn_cxt = AllocSetContextCreate(ctx->context,
 										  "chelabase_keys transaction context",
 										  ALLOCSET_DEFAULT_SIZES);
+	data->stream_cxt = AllocSetContextCreate(ctx->context,
+											 "chelabase_keys stream context",
+											 ALLOCSET_SMALL_SIZES);
+	{
+		HASHCTL		hctl;
+
+		hctl.keysize = sizeof(TransactionId);
+		hctl.entrysize = sizeof(StreamTxn);
+		hctl.hcxt = data->stream_cxt;
+		data->streams = hash_create("chelabase_keys streamed transactions",
+									8, &hctl,
+									HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+	}
 
 	ctx->output_plugin_private = data;
 
@@ -318,6 +397,7 @@ ck_shutdown(LogicalDecodingContext *ctx)
 		return;
 	MemoryContextDelete(data->change_cxt);
 	MemoryContextDelete(data->txn_cxt);
+	MemoryContextDelete(data->stream_cxt);
 }
 
 /*
@@ -480,6 +560,26 @@ append_json_utf8(StringInfo out, const char *s)
 }
 
 /*
+ * A relation's part of a message before its op:
+ * {"rel":<oid>,"s":"<schema>","t":"<table>", from the (historic) catalog,
+ * allocated in the current memory context.
+ */
+static char *
+rel_prefix(Relation relation, int *len)
+{
+	StringInfoData buf;
+	char	   *nspname = get_namespace_name(RelationGetNamespace(relation));
+
+	initStringInfo(&buf);
+	appendStringInfo(&buf, "{\"rel\":%u,\"s\":", RelationGetRelid(relation));
+	append_json_utf8(&buf, nspname ? nspname : "");
+	appendStringInfoString(&buf, ",\"t\":");
+	append_json_utf8(&buf, RelationGetRelationName(relation));
+	*len = buf.len;
+	return buf.data;
+}
+
+/*
  * The relation's entry in this transaction, made on its first change.
  * Returns NULL when the transaction is (now) "all".
  */
@@ -490,8 +590,6 @@ get_rel(ChelabaseKeysData *data, Relation relation)
 	RelEntry   *re;
 	bool		found;
 	MemoryContext old;
-	StringInfoData buf;
-	char	   *nspname;
 
 	if (data->all)
 		return NULL;
@@ -531,14 +629,7 @@ get_rel(ChelabaseKeysData *data, Relation relation)
 		re->key_bytes[op] = 0;
 	}
 
-	nspname = get_namespace_name(RelationGetNamespace(relation));
-	initStringInfo(&buf);
-	appendStringInfo(&buf, "{\"rel\":%u,\"s\":", relid);
-	append_json_utf8(&buf, nspname ? nspname : "");
-	appendStringInfoString(&buf, ",\"t\":");
-	append_json_utf8(&buf, RelationGetRelationName(relation));
-	re->prefix = buf.data;
-	re->prefix_len = buf.len;
+	re->prefix = rel_prefix(relation, &re->prefix_len);
 
 	re->kcxt = AllocSetContextCreate(data->txn_cxt,
 									 "chelabase_keys relation keys",
@@ -941,4 +1032,234 @@ ck_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 		AtEOXact_GUC(true, data->guc_nestlevel);
 		data->guc_nestlevel = 0;
 	}
+}
+
+/* ---- streamed transactions (W9) ---- */
+
+/*
+ * The streamed transaction's entry, by its top-level xid.  With create, the
+ * entry is made on the transaction's first streamed change; without, NULL
+ * when it has none (it streamed no row change yet).
+ */
+static StreamTxn *
+stream_txn(ChelabaseKeysData *data, ReorderBufferTXN *txn, bool create)
+{
+	TransactionId xid = rbtxn_get_toptxn(txn)->xid;
+	StreamTxn  *st;
+	bool		found;
+
+	st = hash_search(data->streams, &xid, create ? HASH_ENTER : HASH_FIND,
+					 &found);
+	if (st == NULL || found)
+		return st;
+
+	st->all = false;
+	st->cxt = AllocSetContextCreate(data->stream_cxt,
+									"chelabase_keys streamed transaction",
+									ALLOCSET_SMALL_SIZES);
+	{
+		HASHCTL		hctl;
+
+		hctl.keysize = sizeof(Oid);
+		hctl.entrysize = sizeof(StreamRel);
+		hctl.hcxt = st->cxt;
+		st->rels = hash_create("chelabase_keys streamed relations", 16, &hctl,
+							   HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+	}
+	st->rel_order = NIL;
+	st->nrels = 0;
+	st->size = MESSAGE_FRAME_MAX;
+	return st;
+}
+
+/*
+ * Free a streamed transaction's state: at its commit and at every top-level
+ * abort (RT4-13).
+ */
+static void
+stream_txn_free(ChelabaseKeysData *data, StreamTxn *st)
+{
+	TransactionId xid = st->xid;
+
+	MemoryContextDelete(st->cxt);
+	(void) hash_search(data->streams, &xid, HASH_REMOVE, NULL);
+}
+
+/*
+ * Record a relation the streamed transaction touched, in first-change order;
+ * past max_tables relations or max_message_bytes the transaction is "all",
+ * its relations are dropped and collection stops.
+ */
+static void
+stream_add_rel(ChelabaseKeysData *data, StreamTxn *st, Relation relation)
+{
+	Oid			relid = RelationGetRelid(relation);
+	StreamRel  *sr;
+	bool		found;
+	char	   *prefix;
+	int			prefix_len;
+	int64		size;
+
+	if (st->all)
+		return;
+	if (hash_search(st->rels, &relid, HASH_FIND, NULL) != NULL)
+		return;
+
+	if (st->nrels + 1 > data->max_tables)
+	{
+		st->all = true;
+		goto drop;
+	}
+
+	/* the catalog lookups' scratch goes to change_cxt, reset by the caller */
+	prefix = rel_prefix(relation, &prefix_len);
+	size = st->size + prefix_len + OP_PIECE_LEN + C_CLOSE_LEN +
+		(st->nrels > 0 ? 1 : 0);
+	if (size > data->max_message_bytes)
+	{
+		st->all = true;
+		goto drop;
+	}
+
+	sr = hash_search(st->rels, &relid, HASH_ENTER, &found);
+	Assert(!found);
+	sr->prefix = MemoryContextStrdup(st->cxt, prefix);
+	{
+		MemoryContext old = MemoryContextSwitchTo(st->cxt);
+
+		st->rel_order = lappend(st->rel_order, sr);
+		MemoryContextSwitchTo(old);
+	}
+	st->nrels++;
+	st->size = size;
+	return;
+
+drop:
+	/* keep only the entry and its (now empty) context */
+	MemoryContextReset(st->cxt);
+	st->rels = NULL;
+	st->rel_order = NIL;
+	st->nrels = 0;
+}
+
+/* Stream blocks write nothing: the message comes at stream_commit. */
+static void
+ck_stream_start(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
+{
+}
+
+static void
+ck_stream_stop(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
+{
+}
+
+static void
+ck_stream_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+				 Relation relation, ReorderBufferChange *change)
+{
+	ChelabaseKeysData *data = ctx->output_plugin_private;
+	StreamTxn  *st = stream_txn(data, txn, true);
+	MemoryContext old;
+
+	if (st->all)
+		return;
+	old = MemoryContextSwitchTo(data->change_cxt);
+	stream_add_rel(data, st, relation);
+	MemoryContextSwitchTo(old);
+	MemoryContextReset(data->change_cxt);
+}
+
+static void
+ck_stream_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+				   int nrelations, Relation relations[],
+				   ReorderBufferChange *change)
+{
+	ChelabaseKeysData *data = ctx->output_plugin_private;
+	StreamTxn  *st = stream_txn(data, txn, true);
+	MemoryContext old;
+
+	old = MemoryContextSwitchTo(data->change_cxt);
+	for (int i = 0; i < nrelations && !st->all; i++)
+		stream_add_rel(data, st, relations[i]);
+	MemoryContextSwitchTo(old);
+	MemoryContextReset(data->change_cxt);
+}
+
+/*
+ * A top-level abort (ROLLBACK, ROLLBACK PREPARED, or the implicit abort of a
+ * transaction cut by a crash, with an invalid abort_lsn) drops the state and
+ * writes nothing.  A subtransaction abort keeps it: a "c" for a relation
+ * only the aborted subtransaction touched is a harmless extra refetch.
+ */
+static void
+ck_stream_abort(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+				XLogRecPtr abort_lsn)
+{
+	ChelabaseKeysData *data = ctx->output_plugin_private;
+	StreamTxn  *st;
+
+	if (!rbtxn_is_toptxn(txn))
+		return;
+	st = stream_txn(data, txn, false);
+	if (st != NULL)
+		stream_txn_free(data, st);
+}
+
+/*
+ * The streamed transaction's one message, in the same form and at the same
+ * place as a commit's (lsn = txn->end_lsn, the full xid); nothing when it
+ * touched no rows.
+ */
+static void
+ck_stream_commit(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+				 XLogRecPtr commit_lsn)
+{
+	ChelabaseKeysData *data = ctx->output_plugin_private;
+	StreamTxn  *st = stream_txn(data, txn, false);
+	FullTransactionId fxid;
+	StringInfo	out;
+
+	if (st == NULL)
+		return;
+
+	if (st->all || st->nrels > 0)
+	{
+		/* RT3-2: the full transaction id, comparable with pg_current_xact_id() */
+		fxid = FullTransactionIdFromAllowableAt(ReadNextFullTransactionId(),
+												txn->xid);
+
+		OutputPluginPrepareWrite(ctx, true);
+		out = ctx->out;
+		appendStringInfo(out, "{\"v\":1,\"lsn\":\"%X/%X\",\"xid\":" UINT64_FORMAT,
+						 LSN_FORMAT_ARGS(txn->end_lsn),
+						 U64FromFullTransactionId(fxid));
+		if (st->all)
+			appendStringInfoString(out, ",\"all\":true}");
+		else
+		{
+			ListCell   *lc;
+			bool		first = true;
+#ifdef USE_ASSERT_CHECKING
+			int			start = out->len;
+#endif
+
+			appendStringInfoString(out, ",\"changes\":[");
+			foreach(lc, st->rel_order)
+			{
+				StreamRel  *sr = lfirst(lc);
+
+				if (!first)
+					appendStringInfoChar(out, ',');
+				appendStringInfoString(out, sr->prefix);
+				appendStringInfoString(out, ",\"op\":\"c\"}");
+				first = false;
+			}
+			appendStringInfoString(out, "]}");
+			/* the budget is an upper bound of the message's length */
+			Assert(out->len - start <= st->size);
+		}
+		OutputPluginWrite(ctx, true);
+	}
+
+	stream_txn_free(data, st);
 }
