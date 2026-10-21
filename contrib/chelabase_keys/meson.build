@@ -28,6 +28,7 @@ tests += {
       'edges',
       'encoding',
       'stream',
+      'stream_edges',
     ],
     'regress_args': [
       '--temp-config', files('logical.conf'),
@@ -40,6 +41,7 @@ tests += {
   'isolation': {
     'specs': [
       'stream_interleave',
+      'stream_many',
     ],
     'regress_args': [
       '--temp-config', files('logical.conf'),

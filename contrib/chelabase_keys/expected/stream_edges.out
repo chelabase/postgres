@@ -1,0 +1,15 @@
+\set ECHO none
+created
+drained
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"se_a","op":"c"}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"se_c","op":"c"}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"se_nopk","op":"c"},{"rel":R,"s":"public","t":"se_a","op":"c"}]}
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"se_c","op":"c"},{"rel":R,"s":"public","t":"se_b","op":"c"},{"rel":R,"s":"public","t":"se_a","op":"c"}]}
+{"v":1,"lsn":"L","xid":X,"all":true}
+emitted
+{"v":1,"lsn":"L","xid":X,"changes":[{"rel":R,"s":"public","t":"se_a","op":"c"}]}
+drained
+200 relations|t|t
+{"v":1,"lsn":"L","xid":X,"all":true}
+t
+dropped

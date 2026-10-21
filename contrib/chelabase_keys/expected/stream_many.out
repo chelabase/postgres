@@ -1,0 +1,37 @@
+Parsed test spec with 6 sessions
+
+starting permutation: s1_begin s2_begin s3_begin s4_begin s1_a s2_a s3_a s4_a s5_1 s3_sp s3_x s4_sp s4_x s3_rollback_to s4_rollback_to s2_b s5_2 s1_b s3_b s4_rollback s3_commit s2_rollback s1_commit s5_3 s0_get
+step s1_begin: BEGIN;
+step s2_begin: BEGIN;
+step s3_begin: BEGIN;
+step s4_begin: BEGIN;
+step s1_a: INSERT INTO sm_1 SELECT g, sm_pad(g) FROM generate_series(1, 60) g;
+step s2_a: INSERT INTO sm_2 SELECT g, sm_pad(g) FROM generate_series(1, 60) g;
+step s3_a: INSERT INTO sm_3 SELECT g, sm_pad(g) FROM generate_series(1, 60) g;
+step s4_a: INSERT INTO sm_4 SELECT g, sm_pad(g) FROM generate_series(1, 60) g;
+step s5_1: INSERT INTO sm_s VALUES (1);
+step s3_sp: SAVEPOINT p;
+step s3_x: INSERT INTO sm_x SELECT g, sm_pad(g) FROM generate_series(1, 60) g;
+step s4_sp: SAVEPOINT p;
+step s4_x: INSERT INTO sm_x SELECT g, sm_pad(g) FROM generate_series(1001, 1060) g;
+step s3_rollback_to: ROLLBACK TO p;
+step s4_rollback_to: ROLLBACK TO p;
+step s2_b: INSERT INTO sm_2 SELECT g, sm_pad(g) FROM generate_series(61, 120) g;
+step s5_2: INSERT INTO sm_s VALUES (2);
+step s1_b: INSERT INTO sm_1 SELECT g, sm_pad(g) FROM generate_series(61, 120) g;
+step s3_b: INSERT INTO sm_3 SELECT g, sm_pad(g) FROM generate_series(61, 120) g;
+step s4_rollback: ROLLBACK;
+step s3_commit: COMMIT;
+step s2_rollback: ROLLBACK;
+step s1_commit: COMMIT;
+step s5_3: INSERT INTO sm_s VALUES (3);
+step s0_get: SELECT m AS one_line_per_message_in_commit_order FROM sm_msgs() m;
+one_line_per_message_in_commit_order
+------------------------------------
+sm_s i [["1"]]......................
+sm_s i [["2"]]......................
+sm_3 c..............................
+sm_1 c..............................
+sm_s i [["3"]]......................
+(5 rows)
+
