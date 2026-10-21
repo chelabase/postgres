@@ -5505,6 +5505,7 @@ StartupXLOG(void)
 	CheckPoint	checkPoint;
 	bool		wasShutdown;
 	bool		didCrash;
+	bool		startedFromBasebackup;
 	bool		haveTblspcMap;
 	bool		haveBackupLabel;
 	XLogRecPtr	EndOfLog;
@@ -5635,6 +5636,22 @@ StartupXLOG(void)
 		didCrash = false;
 
 	/*
+	 * NEON specific: did pg_replslot come from the pageserver's basebackup,
+	 * or is this a restart of this compute's own data directory?  Decided on
+	 * the control file before InitWalRecovery changes it.  The pageserver
+	 * always writes DB_SHUTDOWNED with checkPoint 0 (generate_pg_control:
+	 * the location is ignored, NeonRecoveryRequested allows it above).
+	 * Postgres never writes that pair: a postmaster crash-restart finds
+	 * DB_IN_PRODUCTION (or a recovery state, if it crashed while starting),
+	 * and a clean shutdown's checkpoint has its record's LSN, so a restart
+	 * after one (with, say, a walsender's temporary slot left behind because
+	 * the walsender was killed after the shutdown checkpoint) is not taken
+	 * for a basebackup start.  StartupReplicationSlots uses it.
+	 */
+	startedFromBasebackup = (ControlFile->state == DB_SHUTDOWNED &&
+							 ControlFile->checkPoint == InvalidXLogRecPtr);
+
+	/*
 	 * Prepare for WAL recovery if needed.
 	 *
 	 * InitWalRecovery analyzes the control file and the backup label file, if
@@ -5676,7 +5693,7 @@ StartupXLOG(void)
 	 * Initialize replication slots, before there's a chance to remove
 	 * required resources.
 	 */
-	StartupReplicationSlots();
+	StartupReplicationSlots(startedFromBasebackup);
 
 	/*
 	 * Startup logical state, needs to be setup now so we have proper data

@@ -172,7 +172,7 @@ static void ReplicationSlotShmemExit(int code, Datum arg);
 static void ReplicationSlotDropPtr(ReplicationSlot *slot);
 
 /* internal persistency functions */
-static void RestoreSlotFromDisk(const char *name);
+static void RestoreSlotFromDisk(const char *name, bool record_discarded);
 static void CreateSlotOnDisk(ReplicationSlot *slot);
 static void SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel);
 
@@ -1972,9 +1972,23 @@ CheckPointReplicationSlots(bool is_shutdown)
 /*
  * Load all replication slots from disk into memory at server startup. This
  * needs to be run before we start crash recovery.
+ *
+ * NEON specific: from_basebackup is whether pg_replslot came from the
+ * pageserver's basebackup (StartupXLOG decides it on the control file:
+ * DB_SHUTDOWNED with no checkpoint location, which only the pageserver
+ * writes).  Only then is a non-persistent logical slot's state a stale
+ * pageserver copy that LogDiscardedSlotFiles must remove.  Every other start
+ * is a restart of this compute's own data directory: after a crash
+ * (DB_IN_PRODUCTION, or a recovery state if it crashed while starting) or
+ * after a clean shutdown (DB_SHUTDOWNED, with the shutdown checkpoint's
+ * location; a walsender killed after that checkpoint can leave its temporary
+ * slot behind).  Its temporary and ephemeral slots were created locally and
+ * never copied, so removing their copy would remove an aux file the
+ * pageserver never had.  neon.signal can't tell the starts apart: it is
+ * never unlinked.
  */
 void
-StartupReplicationSlots(void)
+StartupReplicationSlots(bool from_basebackup)
 {
 	DIR		   *replication_dir;
 	struct dirent *replication_de;
@@ -2014,7 +2028,7 @@ StartupReplicationSlots(void)
 		}
 
 		/* looks like a slot in a normal state, restore */
-		RestoreSlotFromDisk(replication_de->d_name);
+		RestoreSlotFromDisk(replication_de->d_name, from_basebackup);
 	}
 	FreeDir(replication_dir);
 
@@ -2313,9 +2327,12 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 
 /*
  * Load a single slot from disk into memory.
+ *
+ * NEON specific: record_discarded is StartupReplicationSlots's
+ * from_basebackup.
  */
 static void
-RestoreSlotFromDisk(const char *name)
+RestoreSlotFromDisk(const char *name, bool record_discarded)
 {
 	ReplicationSlotOnDisk cp;
 	int			i;
@@ -2462,9 +2479,13 @@ RestoreSlotFromDisk(const char *name)
 		 * NEON specific: on a primary, a logical slot's state here came from
 		 * the pageserver's copy, so that copy is stale; remember the name for
 		 * LogDiscardedSlotFiles (WAL can't be written yet).  A standby's
-		 * basebackup ships no slots and its own were never copied.
+		 * basebackup ships no slots and its own were never copied.  On a
+		 * restart of this compute's own data directory (!record_discarded:
+		 * after a crash or a clean shutdown) the slot is its own local one,
+		 * never copied either.
 		 */
-		if (cp.slotdata.database != InvalidOid && !ArchiveRecoveryRequested)
+		if (record_discarded && cp.slotdata.database != InvalidOid &&
+			!ArchiveRecoveryRequested)
 		{
 			MemoryContext oldcxt = MemoryContextSwitchTo(TopMemoryContext);
 
