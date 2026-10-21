@@ -30,8 +30,14 @@ UPDATE st_a SET id = 3 WHERE id = 2;
 DELETE FROM st_b WHERE id = 1;
 COMMIT;
 SELECT * FROM keys('s');
--- a subtransaction rolled back: its relation stays in the message (the entry
--- is kept; an extra c is a harmless refetch)
+-- a subtransaction rolled back: the message has only st_a.  Here the decoding
+-- runs after the rollback, so while Postgres streams the subtransaction's
+-- change its catalog lookup finds the subtransaction aborted ("concurrent
+-- abort", genam.c HandleConcurrentAbort, caught in ReorderBufferProcessTXN)
+-- and the change never reaches the plugin.  A subtransaction streamed while it
+-- still ran keeps its relation after the rollback (the plugin keeps the entry;
+-- an extra c is a harmless refetch): test_chelabase_keys_stream.py covers that
+-- over the walsender.
 BEGIN;
 INSERT INTO st_a VALUES (4);
 SAVEPOINT p;
