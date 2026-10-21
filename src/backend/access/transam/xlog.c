@@ -6263,6 +6263,12 @@ StartupXLOG(void)
 	 */
 	XLogReportParameters();
 
+	/*
+	 * NEON specific: remove the pageserver's stale copies of the temporary
+	 * slots StartupReplicationSlots deleted, before backends can write WAL.
+	 */
+	LogDiscardedSlotFiles();
+
 	/* If this is archive recovery, perform post-recovery cleanup actions. */
 	if (ArchiveRecoveryRequested)
 		CleanupAfterArchiveRecovery(EndOfLogTLI, EndOfLog, newTLI);

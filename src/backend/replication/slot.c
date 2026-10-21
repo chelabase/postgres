@@ -58,6 +58,7 @@
 #include "storage/procarray.h"
 #include "utils/builtins.h"
 #include "utils/guc_hooks.h"
+#include "utils/memutils.h"
 #include "utils/varlena.h"
 
 /*
@@ -157,6 +158,15 @@ static SyncStandbySlotsConfigData *synchronized_standby_slots_config;
  * corresponding to the physical slots specified in the synchronized_standby_slots GUC.
  */
 static XLogRecPtr ss_oldest_flush_lsn = InvalidXLogRecPtr;
+
+/*
+ * NEON specific: names of the non-persistent logical slots RestoreSlotFromDisk
+ * deleted at startup on a primary.  Their state came from the pageserver's
+ * stale `neon-file:` copy (an older compute copied every logical slot), which
+ * LogDiscardedSlotFiles removes once WAL can be written.  Lives in the
+ * startup process, in TopMemoryContext.
+ */
+static List *discarded_slot_files = NIL;
 
 static void ReplicationSlotShmemExit(int code, Datum arg);
 static void ReplicationSlotDropPtr(ReplicationSlot *slot);
@@ -945,7 +955,13 @@ ReplicationSlotDropPtr(ReplicationSlot *slot)
 	sprintf(path, "pg_replslot/%s", NameStr(slot->data.name));
 	sprintf(tmppath, "pg_replslot/%s.tmp", NameStr(slot->data.name));
 
-	if (SlotIsLogical(slot) && XLogInsertAllowed())
+	/*
+	 * NEON specific: only a persistent slot's state is copied to the
+	 * pageserver (SaveSlotToPath), so only its copy is removed.  A temporary
+	 * or ephemeral slot never had one.
+	 */
+	if (SlotIsLogical(slot) && slot->data.persistency == RS_PERSISTENT &&
+		XLogInsertAllowed())
 	{
 		/* NEON specific: delete slot from storage using logical message */
 		char		prefix[MAXPGPATH];
@@ -2011,6 +2027,40 @@ StartupReplicationSlots(void)
 	ReplicationSlotsComputeRequiredLSN();
 }
 
+/*
+ * NEON specific: remove the pageserver's copy of every non-persistent logical
+ * slot StartupReplicationSlots deleted, one empty `neon-file:` message per
+ * slot, then flush.  Called by the startup process at the end of recovery,
+ * once local WAL inserts are allowed.  Idempotent: if the compute stops
+ * before the flush, the next start finds the same copies and removes them.
+ */
+void
+LogDiscardedSlotFiles(void)
+{
+	ListCell   *lc;
+	XLogRecPtr	last = InvalidXLogRecPtr;
+
+	if (discarded_slot_files == NIL)
+		return;
+
+	if (XLogInsertAllowed())
+	{
+		foreach(lc, discarded_slot_files)
+		{
+			const char *name = (const char *) lfirst(lc);
+			char		prefix[MAXPGPATH];
+
+			snprintf(prefix, sizeof(prefix), "neon-file:pg_replslot/%s/state", name);
+			elog(LOG, "Remove the stored state of discarded replication slot \"%s\"", name);
+			last = LogLogicalMessage(prefix, NULL, 0, false, false);
+		}
+		XLogFlush(last);
+	}
+
+	list_free_deep(discarded_slot_files);
+	discarded_slot_files = NIL;
+}
+
 /* ----
  * Manipulation of on-disk state of replication slots
  *
@@ -2142,7 +2192,16 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 				ReplicationSlotOnDiskChecksummedSize);
 	FIN_CRC32C(cp.checksum);
 
-	if (SlotIsLogical(slot) && XLogInsertAllowed() && cp.slotdata.restart_lsn != InvalidXLogRecPtr)
+	/*
+	 * NEON specific: only a persistent slot outlives a restart, so only its
+	 * state goes to the pageserver.  A temporary or ephemeral slot is deleted
+	 * by RestoreSlotFromDisk wherever its state is found; a copy of it would
+	 * only be shipped to every later start and carried on the timeline.
+	 * ReplicationSlotPersist saves after setting RS_PERSISTENT, so a slot
+	 * persisted after its creation is copied then.
+	 */
+	if (SlotIsLogical(slot) && cp.slotdata.persistency == RS_PERSISTENT &&
+		XLogInsertAllowed() && cp.slotdata.restart_lsn != InvalidXLogRecPtr)
 	{
 		/* NEON specific: persist slot in storage using logical message */
 		char		prefix[MAXPGPATH];
@@ -2397,6 +2456,20 @@ RestoreSlotFromDisk(const char *name)
 							slotdir)));
 		}
 		fsync_fname("pg_replslot", true);
+
+		/*
+		 * NEON specific: on a primary, a logical slot's state here came from
+		 * the pageserver's copy, so that copy is stale; remember the name for
+		 * LogDiscardedSlotFiles (WAL can't be written yet).  A standby's
+		 * basebackup ships no slots and its own were never copied.
+		 */
+		if (cp.slotdata.database != InvalidOid && !ArchiveRecoveryRequested)
+		{
+			MemoryContext oldcxt = MemoryContextSwitchTo(TopMemoryContext);
+
+			discarded_slot_files = lappend(discarded_slot_files, pstrdup(name));
+			MemoryContextSwitchTo(oldcxt);
+		}
 		return;
 	}
 
