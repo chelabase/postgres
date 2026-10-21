@@ -1,0 +1,23 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s1_begin s1_a s3_begin s3_d s2_b1 s1_c s2_b2 s3_commit s1_commit s2_b3 s0_get
+step s1_begin: BEGIN;
+step s1_a: INSERT INTO si_a SELECT g, si_pad(g) FROM generate_series(1, 60) g;
+step s3_begin: BEGIN;
+step s3_d: INSERT INTO si_d SELECT g, si_pad(g) FROM generate_series(1, 60) g;
+step s2_b1: INSERT INTO si_b VALUES (1);
+step s1_c: INSERT INTO si_c SELECT g, si_pad(g) FROM generate_series(1, 60) g;
+step s2_b2: INSERT INTO si_b VALUES (2);
+step s3_commit: COMMIT;
+step s1_commit: COMMIT;
+step s2_b3: INSERT INTO si_b VALUES (3);
+step s0_get: SELECT m AS one_line_per_message_in_commit_order FROM si_msgs() m;
+one_line_per_message_in_commit_order
+------------------------------------
+si_b i [["1"]]......................
+si_b i [["2"]]......................
+si_d c..............................
+si_a c, si_c c......................
+si_b i [["3"]]......................
+(5 rows)
+

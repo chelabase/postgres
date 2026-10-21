@@ -27,6 +27,7 @@ tests += {
       'limits',
       'edges',
       'encoding',
+      'stream',
     ],
     'regress_args': [
       '--temp-config', files('logical.conf'),
@@ -34,6 +35,17 @@ tests += {
       '--encoding=UTF8',
     ],
     # These tests need "wal_level = logical".
+    'runningcheck': false,
+  },
+  'isolation': {
+    'specs': [
+      'stream_interleave',
+    ],
+    'regress_args': [
+      '--temp-config', files('logical.conf'),
+      '--encoding=UTF8',
+    ],
+    # see above
     'runningcheck': false,
   },
 }

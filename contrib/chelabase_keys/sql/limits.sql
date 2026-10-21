@@ -3,6 +3,10 @@
 \pset tuples_only on
 \pset format unaligned
 SET client_min_messages = warning;
+-- W9: these bounds are those of a transaction decoded at its commit; a
+-- transaction past logical_decoding_work_mem (logical.conf's 64kB) is streamed
+-- and reports only "c" (stream.sql), so this file decodes with room to spare
+SET logical_decoding_work_mem = '64MB';
 CREATE OR REPLACE FUNCTION keys(slot text, VARIADIC opts text[] DEFAULT '{}') RETURNS SETOF text LANGUAGE sql AS $$
   SELECT regexp_replace(regexp_replace(data,
            '"lsn":"[0-9A-F]+/[0-9A-F]+","xid":[0-9]+', '"lsn":"L","xid":X'),
