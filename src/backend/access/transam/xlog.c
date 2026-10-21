@@ -5505,6 +5505,7 @@ StartupXLOG(void)
 	CheckPoint	checkPoint;
 	bool		wasShutdown;
 	bool		didCrash;
+	bool		startedShutdown;
 	bool		haveTblspcMap;
 	bool		haveBackupLabel;
 	XLogRecPtr	EndOfLog;
@@ -5635,6 +5636,15 @@ StartupXLOG(void)
 		didCrash = false;
 
 	/*
+	 * NEON specific: the state before InitWalRecovery changes it.  A
+	 * basebackup's control file always says DB_SHUTDOWNED (the pageserver
+	 * writes it so); a postmaster crash-restart of a running compute finds
+	 * DB_IN_PRODUCTION (or a recovery state, if it crashed while starting).
+	 * StartupReplicationSlots uses it to tell the two starts apart.
+	 */
+	startedShutdown = (ControlFile->state == DB_SHUTDOWNED);
+
+	/*
 	 * Prepare for WAL recovery if needed.
 	 *
 	 * InitWalRecovery analyzes the control file and the backup label file, if
@@ -5676,7 +5686,7 @@ StartupXLOG(void)
 	 * Initialize replication slots, before there's a chance to remove
 	 * required resources.
 	 */
-	StartupReplicationSlots();
+	StartupReplicationSlots(startedShutdown);
 
 	/*
 	 * Startup logical state, needs to be setup now so we have proper data
